@@ -35,25 +35,32 @@ def test_google_maps_search():
     """Test Google Maps search functionality"""
     print("\n🔍 Testing Google Maps search...")
     
-    # Test with a simple query
-    test_query = "restaurants in Berlin"
+    # Test with car wraps query to match user's use case
+    test_query = "car wraps in Florida"
     print(f"Searching for: {test_query}")
     
     try:
-        results = search_google_maps(test_query, max_results=5)
+        results = search_google_maps(test_query, max_results=15)
         
         if results:
             print(f"✅ Found {len(results)} results!")
             
             # Display sample results
-            for i, result in enumerate(results[:3], 1):
+            for i, result in enumerate(results[:5], 1):
                 print(f"\n📍 Result {i}:")
                 print(f"   Name: {result.get('name', 'N/A')}")
                 print(f"   Rating: {result.get('rating', 'N/A')}")
                 print(f"   Reviews: {result.get('reviews', 'N/A')}")
                 print(f"   Category: {result.get('category', 'N/A')}")
-                print(f"   Address: {result.get('address', 'N/A')[:50]}..." if result.get('address') else "   Address: N/A")
+                print(f"   Address: {result.get('address', 'N/A')}")
                 print(f"   Phone: {result.get('phone', 'N/A')}")
+            
+            # Test address and phone extraction quality
+            addresses_found = len([r for r in results if r.get('address')])
+            phones_found = len([r for r in results if r.get('phone')])
+            print(f"\n📊 Quality metrics:")
+            print(f"   Addresses found: {addresses_found}/{len(results)}")
+            print(f"   Phone numbers found: {phones_found}/{len(results)}")
             
             return True
         else:
