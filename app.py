@@ -31,22 +31,47 @@ except locale.Error:
 def setup_driver():
     """Setup Chrome driver with options suitable for VPS environments"""
     chrome_options = Options()
-    chrome_options.add_argument("--headless")
+    
+    # Essential headless options for VPS
+    chrome_options.add_argument("--headless=new")  # Use new headless mode
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--window-size=1920,1080")
-    chrome_options.add_argument("--disable-extensions")
-    chrome_options.add_argument("--disable-plugins")
-    chrome_options.add_argument("--disable-images")
-    chrome_options.add_argument("--remote-debugging-port=9222")
+    chrome_options.add_argument("--disable-software-rasterizer")
     chrome_options.add_argument("--disable-background-timer-throttling")
     chrome_options.add_argument("--disable-backgrounding-occluded-windows")
     chrome_options.add_argument("--disable-renderer-backgrounding")
-    # Set language to English to ensure consistent interface
+    chrome_options.add_argument("--disable-features=TranslateUI")
+    chrome_options.add_argument("--disable-ipc-flooding-protection")
+    chrome_options.add_argument("--disable-background-networking")
+    chrome_options.add_argument("--disable-default-apps")
+    chrome_options.add_argument("--disable-extensions")
+    chrome_options.add_argument("--disable-sync")
+    chrome_options.add_argument("--disable-translate")
+    chrome_options.add_argument("--hide-scrollbars")
+    chrome_options.add_argument("--metrics-recording-only")
+    chrome_options.add_argument("--mute-audio")
+    chrome_options.add_argument("--no-first-run")
+    chrome_options.add_argument("--safebrowsing-disable-auto-update")
+    chrome_options.add_argument("--ignore-certificate-errors")
+    chrome_options.add_argument("--ignore-ssl-errors")
+    chrome_options.add_argument("--ignore-certificate-errors-spki-list")
+    chrome_options.add_argument("--ignore-certificate-errors-spki-list")
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    chrome_options.add_experimental_option('useAutomationExtension', False)
+    
+    # Window size and user agent
+    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    
+    # Language settings
     chrome_options.add_argument("--lang=en-US")
     chrome_options.add_experimental_option('prefs', {
-        'intl.accept_languages': 'en-US,en'
+        'intl.accept_languages': 'en-US,en',
+        'profile.default_content_setting_values.notifications': 2,
+        'profile.default_content_settings.popups': 0,
+        'profile.managed_default_content_settings.images': 2
     })
     
     # Try different Chrome binary locations
@@ -58,31 +83,50 @@ def setup_driver():
         "/snap/bin/chromium"
     ]
     
+    binary_found = False
     for binary in chrome_binaries:
         if os.path.exists(binary):
             chrome_options.binary_location = binary
+            binary_found = True
+            print(f"Using Chrome binary: {binary}")
             break
+    
+    if not binary_found:
+        print("Warning: No Chrome binary found, using system default")
     
     try:
         # Use webdriver-manager to automatically handle ChromeDriver
         service = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=service, options=chrome_options)
+        
+        # Set additional properties to avoid detection
+        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        driver.execute_cdp_cmd('Network.setUserAgentOverride', {
+            "userAgent": 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        })
+        
         return driver
     except Exception as e:
+        print(f"webdriver-manager failed: {e}")
         # Fallback: try without webdriver-manager
         try:
             driver = webdriver.Chrome(options=chrome_options)
+            driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
             return driver
         except Exception as e2:
-            st.error(f"Failed to setup Chrome driver: {str(e)}")
-            st.error(f"Fallback also failed: {str(e2)}")
-            st.info("Please ensure Chrome/Chromium is installed on your system")
+            if 'st' in globals():
+                st.error(f"Failed to setup Chrome driver: {str(e)}")
+                st.error(f"Fallback also failed: {str(e2)}")
+                st.info("Please ensure Chrome/Chromium is installed on your system")
+            else:
+                print(f"Failed to setup Chrome driver: {str(e)}")
+                print(f"Fallback also failed: {str(e2)}")
             return None
 
 def search_google_maps(query, max_results=50):
     """
     Search Google Maps and extract business information
-    Enhanced to work with different languages and locales
+    Enhanced with precise address and phone extraction
     """
     driver = setup_driver()
     if not driver:
@@ -96,80 +140,47 @@ def search_google_maps(query, max_results=50):
         driver.get(search_url)
         
         # Wait for the page to load
-        time.sleep(5)
+        time.sleep(8)
         
-        # Multiple selectors to handle different languages and layouts
-        result_selectors = [
-            '[data-result-index]',
-            '[role="article"]',
-            '.hfpxzc',
-            '[jsaction*="pane"]'
-        ]
-        
-        results_found = False
-        for selector in result_selectors:
-            try:
-                WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, selector))
-                )
-                results_found = True
-                break
-            except TimeoutException:
-                continue
-        
-        if not results_found:
-            st.warning("No results found or page didn't load properly")
+        # Wait for search results to appear
+        try:
+            WebDriverWait(driver, 15).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, '[role="main"]'))
+            )
+        except TimeoutException:
+            st.warning("Search results didn't load properly")
             return []
         
         # Scroll to load more results
-        last_height = driver.execute_script("return document.body.scrollHeight")
-        scroll_attempts = 0
-        max_scroll_attempts = 5
-        
-        while scroll_attempts < max_scroll_attempts:
-            # Scroll down
+        st.info(f"📜 Loading more results...")
+        for i in range(15):  # More scrolling for more results
             driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(3)
-            
-            # Check if we've loaded more content
-            new_height = driver.execute_script("return document.body.scrollHeight")
-            if new_height == last_height:
-                break
-            
-            last_height = new_height
-            scroll_attempts += 1
+            time.sleep(1.5)
         
-        # Get page source and parse with BeautifulSoup
-        soup = BeautifulSoup(driver.page_source, 'html.parser')
+        # Get all business containers
+        containers = driver.find_elements(By.CSS_SELECTOR, '.hfpxzc, .Nv2PK, [data-result-index]')
+        st.info(f"📋 Processing {len(containers)} business containers...")
         
-        # Multiple approaches to find business listings
-        business_elements = []
-        
-        # Method 1: Look for data-result-index elements
-        business_elements.extend(soup.find_all(attrs={'data-result-index': True}))
-        
-        # Method 2: Look for article elements (common in Maps)
-        business_elements.extend(soup.find_all('div', {'role': 'article'}))
-        
-        # Method 3: Look for elements with specific classes
-        business_elements.extend(soup.find_all('div', class_=re.compile(r'hfpxzc|Nv2PK|tH5CWc')))
-        
-        # Remove duplicates
-        seen_elements = set()
-        unique_elements = []
-        for elem in business_elements:
-            elem_text = elem.get_text()[:100]  # First 100 chars as identifier
-            if elem_text not in seen_elements:
-                seen_elements.add(elem_text)
-                unique_elements.append(elem)
-        
-        for element in unique_elements[:max_results]:
+        # Process each container
+        for i, container in enumerate(containers[:max_results]):
             try:
-                business_info = extract_business_info(element)
-                if business_info and business_info.get('name'):
+                # Get all text content
+                full_text = container.text
+                if not full_text or len(full_text) < 10:
+                    continue
+                
+                # Split into lines and clean
+                lines = [line.strip() for line in full_text.split('\n') if line.strip()]
+                
+                # Extract business information
+                business_info = parse_business_lines_improved(lines)
+                
+                if business_info['name']:
                     results.append(business_info)
+                    st.info(f"✅ Extracted: {business_info['name']}")
+                    
             except Exception as e:
-                st.warning(f"Error extracting business info: {str(e)}")
+                st.warning(f"⚠️ Error processing container {i}: {e}")
                 continue
         
     except Exception as e:
@@ -180,11 +191,8 @@ def search_google_maps(query, max_results=50):
     
     return results
 
-def extract_business_info(element):
-    """
-    Extract business information from a Google Maps result element
-    Enhanced to handle different languages and formats
-    """
+def parse_business_lines_improved(lines):
+    """Parse business information from text lines with improved accuracy"""
     business_info = {
         'name': '',
         'rating': '',
@@ -196,98 +204,123 @@ def extract_business_info(element):
         'hours': ''
     }
     
-    try:
-        # Extract business name - multiple selectors for different layouts
-        name_selectors = [
-            '[data-value="Name"]',
-            '.qBF1Pd',
-            '.DUwDvf',
-            'h3',
-            '.fontHeadlineSmall'
-        ]
+    if not lines:
+        return business_info
+    
+    # First line is usually the business name
+    business_info['name'] = clean_business_name_improved(lines[0])
+    
+    # Look through remaining lines for data
+    for line in lines[1:]:
+        line = line.strip()
         
-        for selector in name_selectors:
-            name_elem = element.select_one(selector)
-            if name_elem:
-                business_info['name'] = name_elem.get_text().strip()
-                break
+        # Skip common non-data lines
+        if any(skip in line.lower() for skip in ['directions', 'website', 'call', 'suggest an edit']):
+            continue
         
-        # If no name found with CSS selectors, try text-based approach
-        if not business_info['name']:
-            text_content = element.get_text()
-            lines = [line.strip() for line in text_content.split('\n') if line.strip()]
-            if lines:
-                business_info['name'] = lines[0]
+        # Extract rating and reviews from patterns like "4.8(82)" or "4.8 (82)"
+        rating_review_match = re.search(r'(\d+\.?\d*)\s*\((\d+)\)', line)
+        if rating_review_match and not business_info['rating']:
+            business_info['rating'] = rating_review_match.group(1)
+            business_info['reviews'] = rating_review_match.group(2)
+            continue
         
-        # Extract rating - look for patterns like "4.5" or "4,5" (German format)
-        rating_pattern = r'(\d+[.,]\d+)'
-        rating_text = element.get_text()
-        rating_match = re.search(rating_pattern, rating_text)
-        if rating_match:
-            business_info['rating'] = rating_match.group(1).replace(',', '.')
+        # Check if line is an address
+        if is_address_line_improved(line):
+            if not business_info['address']:
+                business_info['address'] = clean_address_improved(line)
+            continue
         
-        # Extract number of reviews - patterns for different languages
-        review_patterns = [
-            r'(\d+)\s*(?:reviews?|Bewertungen?|recensioni?|avis?)',
-            r'\((\d+)\)',
-            r'(\d+)\s*\('
-        ]
+        # Check if line contains a phone number
+        phone_match = re.search(r'\((\d{3})\)\s*(\d{3})[-.\s]?(\d{4})', line)
+        if phone_match and not business_info['phone']:
+            business_info['phone'] = f"({phone_match.group(1)}) {phone_match.group(2)}-{phone_match.group(3)}"
+            continue
         
-        for pattern in review_patterns:
-            review_match = re.search(pattern, rating_text, re.IGNORECASE)
-            if review_match:
-                business_info['reviews'] = review_match.group(1)
-                break
-        
-        # Extract category/type
-        category_selectors = [
-            '.W4Efsd:nth-of-type(1) .W4Efsd:nth-of-type(1)',
-            '.W4Efsd span',
-            '.fontBodyMedium'
-        ]
-        
-        for selector in category_selectors:
-            category_elem = element.select_one(selector)
-            if category_elem:
-                category_text = category_elem.get_text().strip()
-                # Skip if it's a rating or review count
-                if not re.match(r'^\d+[.,]\d+', category_text) and not re.match(r'^\(\d+\)', category_text):
-                    business_info['category'] = category_text
-                    break
-        
-        # Extract address - look for address-like patterns
-        address_patterns = [
-            r'\d+.*(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Straße|Str|Platz)',
-            r'\d+.*\d{5}',  # Postal code pattern
-        ]
-        
-        text_lines = element.get_text().split('\n')
-        for line in text_lines:
-            line = line.strip()
-            for pattern in address_patterns:
-                if re.search(pattern, line, re.IGNORECASE):
-                    business_info['address'] = line
-                    break
-            if business_info['address']:
-                break
-        
-        # Extract phone number
-        phone_pattern = r'(\+?\d{1,3}[-.\s]?\(?\d{1,4}\)?[-.\s]?\d{1,4}[-.\s]?\d{1,9})'
-        phone_match = re.search(phone_pattern, element.get_text())
-        if phone_match:
-            business_info['phone'] = phone_match.group(1)
-        
-        # Extract website (if visible)
-        website_elem = element.select_one('a[href*="http"]')
-        if website_elem:
-            href = website_elem.get('href')
-            if href and not 'google.com' in href:
-                business_info['website'] = href
-        
-    except Exception as e:
-        st.warning(f"Error extracting specific business info: {str(e)}")
+        # Check for category/type (but not if it's hours or other info)
+        if not business_info['category'] and len(line) < 50:
+            if any(cat in line.lower() for cat in ['vehicle wrapping', 'car detailing', 'sign shop', 'auto', 'wrap']):
+                business_info['category'] = line
     
     return business_info
+
+def is_address_line_improved(line):
+    """Check if a line looks like an address with improved patterns"""
+    if len(line) < 10 or len(line) > 150:
+        return False
+    
+    # Must contain a number
+    if not re.search(r'\d', line):
+        return False
+    
+    # Skip lines that are clearly not addresses
+    skip_patterns = [
+        r'^\d+\.?\d*\s*\(',  # Ratings like "4.8(82)"
+        r'open|close|hour|minute|am|pm',
+        r'star|review|rating',
+        r'vehicle wrapping|car detailing|sign shop'
+    ]
+    
+    for pattern in skip_patterns:
+        if re.search(pattern, line, re.IGNORECASE):
+            return False
+    
+    # Check for address patterns
+    address_indicators = [
+        r'\d+\s+\w+.*(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Way|Pkwy|Parkway|Circle|Cir|Court|Ct|Place|Pl)\b',
+        r'\d+\s+[NSEW]\s+\w+',  # Like "123 N Main St"
+        r'\d+\s+W\s+State\s+Rd',  # Like "10388 W State Rd 84"
+        r'\d+.*(?:Suite|STE|#)\s*\d+',  # Suite numbers
+        r'\d+.*,.*FL\s+\d{5}',  # Florida addresses with zip
+    ]
+    
+    for pattern in address_indicators:
+        if re.search(pattern, line, re.IGNORECASE):
+            return True
+    
+    return False
+
+def clean_address_improved(address):
+    """Clean address with improved precision"""
+    if not address:
+        return ""
+    
+    # Remove everything after · character (common in Google Maps)
+    address = re.sub(r'\s*·.*$', '', address)
+    
+    # Remove hours information
+    address = re.sub(r'\s*(?:Open|Closed|Closes|Opens).*$', '', address, flags=re.IGNORECASE)
+    
+    # Remove phone numbers that might be mixed in
+    address = re.sub(r'\s*\(\d{3}\)\s*\d{3}[-.\s]?\d{4}.*$', '', address)
+    
+    # Remove extra parentheses content (but keep suite numbers)
+    if not re.search(r'#\d+|Suite|STE', address):
+        address = re.sub(r'\s*\([^)]*\)', '', address)
+    
+    # Normalize spaces
+    address = re.sub(r'\s+', ' ', address).strip()
+    
+    return address
+
+def clean_business_name_improved(name):
+    """Clean business name with improved accuracy"""
+    if not name:
+        return ""
+    
+    # Remove rating information that might be attached
+    name = re.sub(r'\s*\d+\.?\d*\s*\(\d+\).*$', '', name)
+    
+    # Remove common prefixes/suffixes
+    name = re.sub(r'^\d+\.\s*', '', name)  # Remove numbering
+    name = re.sub(r'\s*[·•]\s*.*$', '', name)  # Remove after bullet points
+    
+    # Normalize spaces
+    name = re.sub(r'\s+', ' ', name).strip()
+    
+    return name
+
+# Legacy function removed - using improved version above
 
 # Streamlit UI
 st.title("🗺️ Google Maps Business Scraper")
